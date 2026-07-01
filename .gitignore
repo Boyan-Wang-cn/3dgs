@@ -13,12 +13,30 @@ checkpoints/
 logs/
 
 CrossScore-main/
-gaussian-splatting-main/
 
+# 不再忽略 gaussian-splatting-main，因为现在要上传本地版本
+# gaussian-splatting-main/
+
+# data 默认忽略大部分，只放开当前需要的内容
 data/*
 !data/train.ply
 !data/truck.ply
+!data/tandt/
+!data/tandt/train/
+!data/tandt/train/images/
+!data/tandt/train/images/**
+!data/tandt/train/sparse/
+!data/tandt/train/sparse/**
+!data/tandt/truck/
+!data/tandt/truck/images/
+!data/tandt/truck/images/**
+!data/tandt/truck/sparse/
+!data/tandt/truck/sparse/**
 
 *.zip
 *.tar.gz
 *.7z
+
+*.egg-info/
+build/
+dist/
