@@ -16,10 +16,16 @@ data:
       ply_path: "./data/truck.ply"
 
 env:
+  # grid_size is now only the starting grid for adaptive voxel grouping.
+  # The grouping code searches up to max_search_grid_size and merges nearby
+  # voxel cells so each full scene gets about target_num_groups groups.
   grid_size: 4
-  # max_groups is intentionally small for local smoke tests. Set to null or a
-  # larger value for full-scene training on the server.
-  max_groups: 32
+  target_num_groups: 128
+  max_search_grid_size: 32
+  min_group_size: 10
+  # max_groups is debug-only truncation after grouping. Keep it null for
+  # formal runs; use CLI --max-groups only for smoke tests.
+  max_groups: null
   target_size_ratio: 0.3
   # Default stays dummy-only so the repo can be smoke-tested without CUDA,
   # gaussian-splatting, or CrossScore installed.

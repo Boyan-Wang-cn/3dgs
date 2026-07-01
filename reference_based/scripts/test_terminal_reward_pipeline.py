@@ -22,6 +22,10 @@ def main():
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--scene", required=True)
     parser.add_argument("--level", type=int, default=2)
+    parser.add_argument("--target-groups", type=int, default=None)
+    parser.add_argument("--max-groups", type=int, default=None, help="Debug-only truncation after grouping.")
+    parser.add_argument("--grid-size", type=int, default=None)
+    parser.add_argument("--max-search-grid-size", type=int, default=None)
     parser.add_argument("--use-render", action="store_true")
     parser.add_argument("--use-crossscore", action="store_true")
     parser.add_argument("--allow-crossscore-placeholder", action="store_true")
@@ -38,6 +42,10 @@ def main():
         use_crossscore=args.use_crossscore,
         allow_crossscore_placeholder=args.allow_crossscore_placeholder,
         force_recompute_original_score=args.force_recompute_original_score,
+        target_num_groups=args.target_groups,
+        max_groups=args.max_groups,
+        grid_size=args.grid_size,
+        max_search_grid_size=args.max_search_grid_size,
     )
     env.reset(scene)
     actions = [args.level for _ in range(env.frameNum)]

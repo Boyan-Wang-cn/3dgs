@@ -364,10 +364,28 @@ def train(args):
     render_iteration = int(render_cfg.get("iteration", env_cfg.get("iteration", 30000)))
     render_resolution = int(render_cfg.get("resolution", env_cfg.get("resolution", 4)))
     max_groups = args.max_groups if args.max_groups is not None else env_cfg.get("max_groups")
+    target_num_groups = (
+        args.target_groups
+        if args.target_groups is not None
+        else env_cfg.get("target_num_groups", 128)
+    )
+    if target_num_groups is not None:
+        target_num_groups = int(target_num_groups)
+    max_search_grid_size = int(
+        args.max_search_grid_size
+        if args.max_search_grid_size is not None
+        else env_cfg.get("max_search_grid_size", 32)
+    )
+    min_group_size = int(env_cfg.get("min_group_size", 10))
     if max_groups is not None:
         print(
             "WARNING: max_groups is enabled. This is useful for debug/smoke tests, "
             "but it means the episode does not traverse every natural voxel group."
+        )
+    if target_num_groups is not None:
+        print(
+            f"Grouping target enabled: target_num_groups={target_num_groups}, "
+            f"max_search_grid_size={max_search_grid_size}."
         )
 
     env = GS_Environment(
@@ -378,6 +396,9 @@ def train(args):
         if args.target_size_ratio is not None
         else float(env_cfg.get("target_size_ratio", 0.3)),
         max_groups=max_groups,
+        target_num_groups=target_num_groups,
+        max_search_grid_size=max_search_grid_size,
+        min_group_size=min_group_size,
         use_dummy_reward=use_dummy_reward,
         use_render=use_render,
         use_crossscore=use_crossscore,
@@ -472,6 +493,13 @@ def train(args):
         "resume_from",
         "scene",
         "num_groups",
+        "target_num_groups",
+        "actual_num_groups",
+        "requested_grid_size",
+        "grid_size",
+        "natural_group_count",
+        "truncated_by_max_groups",
+        "max_groups",
         "mean_action",
         "mean_level",
         "level_histogram",
@@ -625,6 +653,13 @@ def train(args):
             "resume_from": resume_from,
             "scene": scene.get("name", Path(scene["ply_path"]).stem),
             "num_groups": final_info.get("num_groups", 0),
+            "target_num_groups": final_info.get("target_num_groups", ""),
+            "actual_num_groups": final_info.get("actual_num_groups", final_info.get("num_groups", 0)),
+            "requested_grid_size": final_info.get("requested_grid_size", ""),
+            "grid_size": final_info.get("grid_size", ""),
+            "natural_group_count": final_info.get("natural_group_count", ""),
+            "truncated_by_max_groups": final_info.get("truncated_by_max_groups", ""),
+            "max_groups": final_info.get("max_groups", ""),
             "mean_action": final_info.get("mean_action", 0.0),
             "mean_level": final_info.get("mean_level", final_info.get("mean_action", 0.0)),
             "level_histogram": json.dumps(final_info.get("level_histogram", {}), sort_keys=True),
@@ -682,12 +717,15 @@ def train(args):
 
         print(
             "episode={episode} scene={scene} num_groups={num_groups} "
+            "target_groups={target_groups} grid_size={grid_size} "
             "mean_action={mean_action:.3f} size_ratio={size_ratio:.6f} "
             "left_bitbudget={left_bitbudget:.1f} reward_D={reward_D:.6f} "
             "reward_P={reward_P:.6f} compressed_ply_path={path}".format(
                 episode=row["episode"],
                 scene=row["scene"],
                 num_groups=row["num_groups"],
+                target_groups=row["target_num_groups"],
+                grid_size=row["grid_size"],
                 mean_action=row["mean_action"],
                 size_ratio=row["size_ratio"],
                 left_bitbudget=row["left_bitbudget"],
@@ -708,7 +746,9 @@ def main():
     parser.add_argument("--model-path", default=None)
     parser.add_argument("--grid-size", type=int, default=None)
     parser.add_argument("--target-size-ratio", type=float, default=None)
-    parser.add_argument("--max-groups", type=int, default=None)
+    parser.add_argument("--max-groups", type=int, default=None, help="Debug-only truncation after grouping. Leave unset for formal runs.")
+    parser.add_argument("--target-groups", type=int, default=None, help="Target number of voxel groups per scene, e.g. 128.")
+    parser.add_argument("--max-search-grid-size", type=int, default=None, help="Largest grid_size searched when target_groups is enabled.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gamma", type=float, default=None)
     parser.add_argument("--batch-size", type=int, default=None)

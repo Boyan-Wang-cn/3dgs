@@ -54,6 +54,10 @@ def make_env_from_config(
     allow_crossscore_placeholder: bool = False,
     force_recompute_original_score: bool = False,
     output_dir=None,
+    target_num_groups: int | None = None,
+    max_groups: int | None = None,
+    grid_size: int | None = None,
+    max_search_grid_size: int | None = None,
 ):
     env_cfg = config.get("env", {})
     paths_cfg = config.get("paths", {})
@@ -86,12 +90,25 @@ def make_env_from_config(
     if use_crossscore is None:
         use_crossscore = bool(env_cfg.get("use_crossscore", False))
 
+    if target_num_groups is None:
+        target_num_groups = env_cfg.get("target_num_groups", 128)
+    if max_groups is None:
+        max_groups = env_cfg.get("max_groups")
+    if grid_size is None:
+        grid_size = int(env_cfg.get("grid_size", 4))
+    if max_search_grid_size is None:
+        max_search_grid_size = int(env_cfg.get("max_search_grid_size", 32))
+    min_group_size = int(env_cfg.get("min_group_size", 10))
+
     return GS_Environment(
         scenes=[scene],
         output_root=output_root,
-        grid_size=int(env_cfg.get("grid_size", 4)),
+        grid_size=int(grid_size),
         target_size_ratio=float(env_cfg.get("target_size_ratio", 0.3)),
-        max_groups=env_cfg.get("max_groups"),
+        max_groups=max_groups,
+        target_num_groups=target_num_groups,
+        max_search_grid_size=int(max_search_grid_size),
+        min_group_size=min_group_size,
         use_dummy_reward=use_dummy_reward,
         use_render=use_render,
         use_crossscore=use_crossscore,
@@ -155,6 +172,10 @@ def run_fixed_level(
     allow_crossscore_placeholder: bool = False,
     force_recompute_original_score: bool = False,
     output_dir=None,
+    target_num_groups: int | None = None,
+    max_groups: int | None = None,
+    grid_size: int | None = None,
+    max_search_grid_size: int | None = None,
 ):
     scene = get_scene(config, scene_name)
     env = make_env_from_config(
@@ -166,6 +187,10 @@ def run_fixed_level(
         allow_crossscore_placeholder=allow_crossscore_placeholder,
         force_recompute_original_score=force_recompute_original_score,
         output_dir=output_dir,
+        target_num_groups=target_num_groups,
+        max_groups=max_groups,
+        grid_size=grid_size,
+        max_search_grid_size=max_search_grid_size,
     )
     env.reset(scene)
     actions = [int(level) for _ in range(env.frameNum)]

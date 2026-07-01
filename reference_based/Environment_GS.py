@@ -72,7 +72,9 @@ class GS_Environment(object):
         output_root: str | Path = "outputs",
         grid_size: int = 4,
         target_size_ratio: float = 0.3,
-        max_groups: int | None = 32,
+        max_groups: int | None = None,
+        target_num_groups: int | None = 128,
+        max_search_grid_size: int = 32,
         min_group_size: int = 10,
         opacity_low_threshold: float = 0.01,
         use_dummy_reward: bool = True,
@@ -117,9 +119,11 @@ class GS_Environment(object):
             },
         ]
         self.output_root = Path(output_root)
-        self.grid_size = grid_size
+        self.grid_size = int(grid_size)
         self.target_size_ratio = target_size_ratio
         self.max_groups = max_groups
+        self.target_num_groups = int(target_num_groups) if target_num_groups is not None else None
+        self.max_search_grid_size = int(max_search_grid_size)
         self.min_group_size = min_group_size
         self.opacity_low_threshold = opacity_low_threshold
         self.use_dummy_reward = use_dummy_reward
@@ -242,6 +246,8 @@ class GS_Environment(object):
             grid_size=self.grid_size,
             min_group_size=self.min_group_size,
             max_groups=self.max_groups,
+            target_num_groups=self.target_num_groups,
+            max_search_grid_size=self.max_search_grid_size,
         )
         self.frameNum = len(self.groups.group_indices)
         if self.frameNum == 0:
@@ -437,6 +443,33 @@ class GS_Environment(object):
         )
         return float(quality_info["reward_D"]), info
 
+    def _grouping_info(self) -> dict[str, Any]:
+        if self.groups is None:
+            return {
+                "num_groups": 0,
+                "actual_num_groups": 0,
+                "target_num_groups": self.target_num_groups if self.target_num_groups is not None else "",
+                "requested_grid_size": self.grid_size,
+                "grid_size": self.grid_size,
+                "natural_group_count": 0,
+                "truncated_by_max_groups": False,
+                "max_groups": self.max_groups if self.max_groups is not None else "",
+            }
+        return {
+            "num_groups": int(self.frameNum),
+            "actual_num_groups": int(getattr(self.groups, "actual_group_count", self.frameNum)),
+            "target_num_groups": (
+                int(self.target_num_groups) if self.target_num_groups is not None else ""
+            ),
+            "requested_grid_size": int(getattr(self.groups, "requested_grid_size", self.grid_size)),
+            "grid_size": int(getattr(self.groups, "grid_size", self.grid_size)),
+            "natural_group_count": int(getattr(self.groups, "natural_group_count", self.frameNum)),
+            "truncated_by_max_groups": bool(
+                getattr(self.groups, "truncated_by_max_groups", False)
+            ),
+            "max_groups": self.max_groups if self.max_groups is not None else "",
+        }
+
     def _previous_levels(self):
         return [int(level) for level in self.compression_levels if level is not None]
 
@@ -523,7 +556,7 @@ class GS_Environment(object):
                 "compression_level": compression_level,
                 "baseQP": base_level,
                 "size_ratio": self._estimated_size_ratio(),
-                "num_groups": self.frameNum,
+                **self._grouping_info(),
             }
             self.last_info = info
             return next_state, reward_D, reward_P, False, info
@@ -572,7 +605,7 @@ class GS_Environment(object):
             "original_gaussians": original_gaussians,
             "compressed_gaussians": compressed_gaussians,
             "pruned_gaussians": pruned_gaussians,
-            "num_groups": self.frameNum,
+            **self._grouping_info(),
             "compression_level": compression_level,
             "baseQP": base_level,
             "compression_stats": compression_stats,
