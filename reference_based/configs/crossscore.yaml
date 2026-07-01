@@ -1,0 +1,59 @@
+project:
+  root: "."
+  output_dir: "./outputs"
+  log_dir: "./logs"
+  checkpoint_dir: "./checkpoints"
+
+data:
+  scenes:
+    - name: train
+      source_path: "./data/tandt/train"
+      model_path: "./data/gs_models/train_original"
+      ply_path: "./data/train.ply"
+    - name: truck
+      source_path: "./data/tandt/truck"
+      model_path: "./data/gs_models/truck_original"
+      ply_path: "./data/truck.ply"
+
+env:
+  grid_size: 4
+  max_groups: 32
+  target_size_ratio: 0.3
+  use_dummy_reward: false
+  use_render: true
+  use_crossscore: true
+  iteration: 30000
+  resolution: 4
+  terminal_reward_only: true
+
+training:
+  episodes: 10
+  gamma: 0.99
+  batch_size: 32
+  seed: 42
+
+paths:
+  gaussian_splatting_dir: "./gaussian-splatting-main"
+  crossscore_dir: "./CrossScore-main"
+
+render:
+  python_executable: "python"
+  gaussian_splatting_dir: "./gaussian-splatting-main"
+  iteration: 30000
+  resolution: 4
+
+quality:
+  cache_original_score: true
+  score_higher_is_better: true
+  crossscore_mode: "official_predict"
+  epsilon: 0.02
+
+crossscore:
+  command_template: ""
+  score_output: ""
+  score_parse_mode: "auto"
+  preferred_score_key: "pred_ssim_0_1"
+  python_executable: "python"
+  ckpt: "ckpt/CrossScore-v1.0.0.ckpt"
+  config: "config/default_predict.yaml"
+  allow_image_fallback: false
