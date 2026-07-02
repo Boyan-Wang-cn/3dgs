@@ -67,3 +67,19 @@ crossscore:
   ckpt: "ckpt/CrossScore-v1.0.0.ckpt"
   config: "config/default_predict.yaml"
   allow_image_fallback: false
+
+action:
+  mode: "factorized_25_lightgaussian_compact"
+  num_actions: 25
+  pruning_rates: [0.0, 0.05, 0.10, 0.20, 0.30]
+  precision_profiles:
+    - {sh_degree: 3, sh_bit: 16, geo_bit: 16}
+    - {sh_degree: 2, sh_bit: 12, geo_bit: 16}
+    - {sh_degree: 2, sh_bit: 8, geo_bit: 12}
+    - {sh_degree: 1, sh_bit: 8, geo_bit: 10}
+    - {sh_degree: 0, sh_bit: 6, geo_bit: 8}
+
+compact:
+  format: "lightgaussian_extreme_saving_adapted"
+  size_for_reward: "compact_size_ratio"
+  render_model: "decoded_float_ply"

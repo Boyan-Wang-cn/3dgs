@@ -21,7 +21,7 @@ def main():
     parser = argparse.ArgumentParser(description="Test terminal reward pipeline without RL training.")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--scene", required=True)
-    parser.add_argument("--level", type=int, default=2)
+    parser.add_argument("--action-id", type=int, default=12, help="Factorized action id in [0, 24].")
     parser.add_argument("--target-groups", type=int, default=None)
     parser.add_argument("--max-groups", type=int, default=None, help="Debug-only truncation after grouping.")
     parser.add_argument("--grid-size", type=int, default=None)
@@ -48,7 +48,8 @@ def main():
         max_search_grid_size=args.max_search_grid_size,
     )
     env.reset(scene)
-    actions = [args.level for _ in range(env.frameNum)]
+    action_id = max(0, min(24, int(args.action_id)))
+    actions = [action_id for _ in range(env.frameNum)]
     info = run_action_sequence(env, scene, actions, reset=False)
     print(json.dumps(info, indent=2, ensure_ascii=False, default=str))
 

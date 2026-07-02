@@ -56,7 +56,7 @@ UPDATE_STEP = 4
 SIZE_THRESHOLD = 0.0
 ACTOR_LEARNING_RATE = 1e-4
 CRITIC_LEARNING_RATE = 1e-3
-ACTION_BOUND = [4.0, 2.0]
+ACTION_BOUND = [24.0, 4.0]
 ACTION_DIM = 1
 
 
@@ -89,7 +89,7 @@ def _fallback_flat_ply(scene):
 
 
 def _state_with_base(state_batch, baseQP_batch):
-    return np.concatenate((state_batch, (baseQP_batch / 4.0).reshape(-1, 1)), axis=-1)
+    return np.concatenate((state_batch, (baseQP_batch / 24.0).reshape(-1, 1)), axis=-1)
 
 
 def _safe_normalize_pair(grad_d, grad_p):
@@ -503,6 +503,21 @@ def train(args):
         "mean_action",
         "mean_level",
         "level_histogram",
+        "action_mode",
+        "action_histogram",
+        "pruning_level_histogram",
+        "precision_level_histogram",
+        "mean_pruning_rate",
+        "mean_sh_degree",
+        "mean_sh_bit",
+        "mean_geo_bit",
+        "compact_size_ratio",
+        "render_ply_size_ratio",
+        "estimated_size_ratio",
+        "compact_size",
+        "render_ply_size",
+        "compact_package_path",
+        "render_ply_path",
         "quality_mode",
         "reward_mode",
         "reward_D",
@@ -577,7 +592,7 @@ def train(args):
             )
             _ = delta_action_batch
             exploration = np.random.normal(0.0, args.exploration_std)
-            action = float(np.clip(action_batch[0][0] + exploration, 0.0, 4.0))
+            action = float(np.clip(action_batch[0][0] + exploration, 0.0, 24.0))
             baseQP = float(baseQP_batch[0][0])
 
             next_observation, reward_D, reward_P, done, info = env.step(action, baseQP)
@@ -663,6 +678,21 @@ def train(args):
             "mean_action": final_info.get("mean_action", 0.0),
             "mean_level": final_info.get("mean_level", final_info.get("mean_action", 0.0)),
             "level_histogram": json.dumps(final_info.get("level_histogram", {}), sort_keys=True),
+            "action_mode": final_info.get("action_mode", ""),
+            "action_histogram": json.dumps(final_info.get("action_histogram", {}), sort_keys=True),
+            "pruning_level_histogram": json.dumps(final_info.get("pruning_level_histogram", {}), sort_keys=True),
+            "precision_level_histogram": json.dumps(final_info.get("precision_level_histogram", {}), sort_keys=True),
+            "mean_pruning_rate": final_info.get("mean_pruning_rate", ""),
+            "mean_sh_degree": final_info.get("mean_sh_degree", ""),
+            "mean_sh_bit": final_info.get("mean_sh_bit", ""),
+            "mean_geo_bit": final_info.get("mean_geo_bit", ""),
+            "compact_size_ratio": final_info.get("compact_size_ratio", ""),
+            "render_ply_size_ratio": final_info.get("render_ply_size_ratio", ""),
+            "estimated_size_ratio": final_info.get("estimated_size_ratio", ""),
+            "compact_size": final_info.get("compact_size", ""),
+            "render_ply_size": final_info.get("render_ply_size", ""),
+            "compact_package_path": final_info.get("compact_package_path", ""),
+            "render_ply_path": final_info.get("render_ply_path", ""),
             "quality_mode": final_info.get("quality_mode", ""),
             "reward_mode": final_info.get("reward_mode", ""),
             "reward_D": final_reward_D,
@@ -718,9 +748,10 @@ def train(args):
         print(
             "episode={episode} scene={scene} num_groups={num_groups} "
             "target_groups={target_groups} grid_size={grid_size} "
-            "mean_action={mean_action:.3f} size_ratio={size_ratio:.6f} "
+            "mean_action={mean_action:.3f} compact_ratio={size_ratio:.6f} "
+            "render_ply_ratio={render_ply_ratio:.6f} estimated_ratio={estimated_ratio:.6f} "
             "left_bitbudget={left_bitbudget:.1f} reward_D={reward_D:.6f} "
-            "reward_P={reward_P:.6f} compressed_ply_path={path}".format(
+            "reward_P={reward_P:.6f} compact_package={path}".format(
                 episode=row["episode"],
                 scene=row["scene"],
                 num_groups=row["num_groups"],
@@ -728,10 +759,12 @@ def train(args):
                 grid_size=row["grid_size"],
                 mean_action=row["mean_action"],
                 size_ratio=row["size_ratio"],
+                render_ply_ratio=float(row.get("render_ply_size_ratio") or 0.0),
+                estimated_ratio=float(row.get("estimated_size_ratio") or 0.0),
                 left_bitbudget=row["left_bitbudget"],
                 reward_D=row["reward_D"],
                 reward_P=row["reward_P"],
-                path=row["compressed_ply_path"],
+                path=row.get("compact_package_path") or row["compressed_ply_path"],
             )
         )
 

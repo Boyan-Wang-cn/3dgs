@@ -330,7 +330,7 @@ class GS_Environment(object):
             info["reward_mode"] = "dummy"
             info["quality_mode"] = "dummy"
             info["crossscore_is_placeholder"] = False
-            return -float(mean_action / 4.0 * 0.1), info
+            return -float(mean_action / 24.0 * 0.1), info
 
         if not self.use_render:
             info["reward_mode"] = "none"
@@ -528,7 +528,7 @@ class GS_Environment(object):
             raise RuntimeError("Episode is done. Call reset() before step().")
         action_continuous = float(np.asarray(action).reshape(-1)[0])
         base_level = float(np.asarray(baseQP).reshape(-1)[0])
-        compression_level = int(round(np.clip(action_continuous, 0.0, 4.0)))
+        compression_level = int(round(np.clip(action_continuous, 0.0, 24.0)))
 
         group_idx = self.current_group_idx
         self.compression_levels[group_idx] = compression_level
@@ -576,11 +576,22 @@ class GS_Environment(object):
             self.episode,
             iteration=self.iteration,
         )
-        compressed_size_bytes = compressed_ply_path.stat().st_size
-        size_ratio = compressed_size_bytes / max(float(self.original_size_bytes), 1.0)
-        left_bitbudget = float(self.target_size_bytes - compressed_size_bytes)
-        mean_action = float(np.mean(levels)) if levels else 0.0
-        level_histogram = {
+        render_ply_size_bytes = compressed_ply_path.stat().st_size
+        compact_package_path = compression_stats.get("compact_package_path", "")
+        compact_size_bytes = int(compression_stats.get("compact_size_bytes", 0) or 0)
+        if compact_size_bytes <= 0 and compact_package_path:
+            compact_size_bytes = Path(compact_package_path).stat().st_size
+        if compact_size_bytes <= 0:
+            compact_size_bytes = render_ply_size_bytes
+
+        compact_size_ratio = compact_size_bytes / max(float(self.original_size_bytes), 1.0)
+        render_ply_size_ratio = render_ply_size_bytes / max(float(self.original_size_bytes), 1.0)
+        estimated_size_ratio = float(compression_stats.get("estimated_size_ratio", self._estimated_size_ratio()))
+        size_ratio = compact_size_ratio
+        left_bitbudget = float(self.target_size_bytes - compact_size_bytes)
+
+        mean_action = float(compression_stats.get("mean_action", np.mean(levels) if levels else 0.0))
+        level_histogram = compression_stats.get("level_histogram") or compression_stats.get("action_histogram") or {
             str(level): int(count)
             for level, count in zip(*np.unique(np.asarray(levels, dtype=int), return_counts=True))
         }
@@ -593,15 +604,32 @@ class GS_Environment(object):
             "left_bitbudget": left_bitbudget,
             "target_size_bytes": float(self.target_size_bytes),
             "original_size": int(self.original_size_bytes),
-            "compressed_size": int(compressed_size_bytes),
+            "compressed_size": int(compact_size_bytes),
+            "compact_size": int(compact_size_bytes),
+            "compact_size_bytes": int(compact_size_bytes),
+            "render_ply_size": int(render_ply_size_bytes),
+            "render_ply_size_bytes": int(render_ply_size_bytes),
             "size_ratio": float(size_ratio),
-            "disk_size_ratio": float(size_ratio),
+            "compact_size_ratio": float(compact_size_ratio),
+            "render_ply_size_ratio": float(render_ply_size_ratio),
+            "estimated_size_ratio": float(estimated_size_ratio),
+            "disk_size_ratio": float(compact_size_ratio),
             "target_size_ratio": float(self.target_size_ratio),
             "compressed_ply_path": str(compressed_ply_path),
+            "render_ply_path": str(compressed_ply_path),
+            "compact_package_path": str(compact_package_path),
             "compressed_model_dir": str(compressed_model_dir),
+            "action_mode": compression_stats.get("action_mode", "factorized_25_lightgaussian_compact"),
             "mean_action": mean_action,
             "mean_level": mean_action,
             "level_histogram": level_histogram,
+            "action_histogram": compression_stats.get("action_histogram", level_histogram),
+            "pruning_level_histogram": compression_stats.get("pruning_level_histogram", {}),
+            "precision_level_histogram": compression_stats.get("precision_level_histogram", {}),
+            "mean_pruning_rate": compression_stats.get("mean_pruning_rate", 0.0),
+            "mean_sh_degree": compression_stats.get("mean_sh_degree", 0.0),
+            "mean_sh_bit": compression_stats.get("mean_sh_bit", 0.0),
+            "mean_geo_bit": compression_stats.get("mean_geo_bit", 0.0),
             "original_gaussians": original_gaussians,
             "compressed_gaussians": compressed_gaussians,
             "pruned_gaussians": pruned_gaussians,

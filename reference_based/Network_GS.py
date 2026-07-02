@@ -3,7 +3,7 @@
 QP-to-3DGS mapping:
 - baseQP is kept as a variable name but now means base compression level.
 - deltaQP is migrated to delta compression level.
-- final compression level = round(clip(baseLevel + deltaLevel, 0, 4)).
+- final action id = round(clip(baseAction + deltaAction, 0, 24)).
 - q_value_D is the quality critic Q_D(s, a).
 - q_value_P is the size critic Q_P(s, a).
 
@@ -22,7 +22,7 @@ import numpy as np
 
 GAMMA = 0.99
 TAU = 0.001
-LEVEL_MAX = 4.0
+LEVEL_MAX = 24.0
 
 
 def _as_2d(x) -> np.ndarray:
@@ -258,7 +258,7 @@ class ActorNetwork(object):
 
         The original dual_critic baseline optimizes a baseQP branch and a
         deltaQP branch.  In this 3DGS migration the same decomposition is
-        kept as base compression level + delta compression level.  The critic
+        kept as base factorized action id + delta action id.  The critic
         provides dQ / d(final_level).  The final level depends on the base
         branch directly and also indirectly through the delta branch input
         (the delta network receives base_level / LEVEL_MAX).  We therefore
