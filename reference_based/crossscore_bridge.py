@@ -483,17 +483,26 @@ def compute_quality_reward(
     compressed_score,
     higher_is_better: bool = True,
     epsilon: float = 0.0,
+    dense_alpha: float = 1.0,
+    violation_alpha: float = 2.0,
 ) -> dict:
     if higher_is_better:
         quality_drop = float(original_score) - float(compressed_score)
     else:
         quality_drop = float(compressed_score) - float(original_score)
     penalized_quality_drop = max(0.0, quality_drop - float(epsilon))
-    reward_D = -penalized_quality_drop
+    dense_quality_drop = max(0.0, quality_drop)
+    reward_D = (
+        -float(dense_alpha) * dense_quality_drop
+        - float(violation_alpha) * penalized_quality_drop
+    )
     return {
         "quality_drop": quality_drop,
         "quality_epsilon": float(epsilon),
         "penalized_quality_drop": penalized_quality_drop,
+        "dense_quality_drop": dense_quality_drop,
+        "dense_alpha": float(dense_alpha),
+        "violation_alpha": float(violation_alpha),
         "reward_D": reward_D,
     }
 

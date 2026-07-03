@@ -100,6 +100,8 @@ class GS_Environment(object):
         crossscore_config: str | Path | None = None,
         crossscore_allow_image_fallback: bool = False,
         quality_epsilon: float = 0.0,
+        quality_dense_alpha: float = 1.0,
+        quality_violation_alpha: float = 2.0,
         allow_crossscore_placeholder: bool = False,
         force_recompute_original_score: bool = False,
         terminal_reward_only: bool = True,
@@ -156,6 +158,8 @@ class GS_Environment(object):
         self.crossscore_config = crossscore_config
         self.crossscore_allow_image_fallback = crossscore_allow_image_fallback
         self.quality_epsilon = float(quality_epsilon)
+        self.quality_dense_alpha = float(quality_dense_alpha)
+        self.quality_violation_alpha = float(quality_violation_alpha)
         self.allow_crossscore_placeholder = allow_crossscore_placeholder
         self.force_recompute_original_score = force_recompute_original_score
         self.terminal_reward_only = terminal_reward_only
@@ -416,6 +420,8 @@ class GS_Environment(object):
             compressed_score,
             higher_is_better=self.score_higher_is_better,
             epsilon=self.quality_epsilon,
+            dense_alpha=self.quality_dense_alpha,
+            violation_alpha=self.quality_violation_alpha,
         )
         info.update(
             {
@@ -426,6 +432,9 @@ class GS_Environment(object):
                 "quality_drop": float(quality_info["quality_drop"]),
                 "quality_epsilon": float(quality_info["quality_epsilon"]),
                 "penalized_quality_drop": float(quality_info["penalized_quality_drop"]),
+                "dense_quality_drop": float(quality_info["dense_quality_drop"]),
+                "dense_alpha": float(quality_info["dense_alpha"]),
+                "violation_alpha": float(quality_info["violation_alpha"]),
                 "original_score_file": original_score_info.get("score_file", ""),
                 "original_score_key": original_score_info.get("score_key", ""),
                 "original_parser_mode": original_score_info.get("parser_mode", ""),

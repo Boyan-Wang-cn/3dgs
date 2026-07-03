@@ -17,6 +17,9 @@ import csv
 import json
 import pickle
 import random
+import shutil
+from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +36,7 @@ try:
     )
     from . import Network_GS as Network
     from . import Transition_GS as trans
+    from .compression_ops import decode_action
     from .Environment_GS import GS_Environment
 except ImportError:
     from config_utils import (
@@ -46,6 +50,7 @@ except ImportError:
     )
     import Network_GS as Network
     import Transition_GS as trans
+    from compression_ops import decode_action
     from Environment_GS import GS_Environment
 
 
@@ -97,6 +102,45 @@ def _safe_normalize_pair(grad_d, grad_p):
     if abs(float(grad_d)) > abs(float(grad_p)):
         return grad_d, grad_p * (abs(float(grad_d)) / (abs(float(grad_p)) + eps))
     return grad_d * (abs(float(grad_p)) / (abs(float(grad_d)) + eps)), grad_p
+
+
+@contextmanager
+def _open_csv_writer_with_schema_rotation(path: Path, fieldnames: list[str]):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = list(fieldnames)
+    write_header = False
+    mode = "a"
+
+    if path.exists():
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as fp:
+            existing_header = fp.readline().strip().lstrip("\ufeff")
+        if existing_header.split(",") != fieldnames:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            rotated = path.with_name(
+                f"{path.stem}.schema_mismatch_{timestamp}{path.suffix}"
+            )
+            suffix = 1
+            while rotated.exists():
+                rotated = path.with_name(
+                    f"{path.stem}.schema_mismatch_{timestamp}_{suffix}{path.suffix}"
+                )
+                suffix += 1
+            try:
+                path.replace(rotated)
+            except PermissionError:
+                shutil.copy2(path, rotated)
+            mode = "w"
+            write_header = True
+    else:
+        mode = "w"
+        write_header = True
+
+    with path.open(mode, newline="", encoding="utf-8") as fp:
+        writer = csv.DictWriter(fp, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        yield writer
 
 
 def run_part1_critic_rollout(env, scene, b_actor, t_actor, memory_train, args):
@@ -225,7 +269,15 @@ def update_critics_from_replay(b_critic, t_critic, t_actor, memory_train):
     }
 
 
-def run_part2_actor_rollout(env, scene, b_actor, t_actor, memory_train_actor, args):
+def run_part2_actor_rollout(
+    env,
+    scene,
+    b_actor,
+    t_actor,
+    memory_train_actor,
+    args,
+    memory_train=None,
+):
     observation = env.reset(scene)
     done = False
     final_info = {}
@@ -271,6 +323,18 @@ def run_part2_actor_rollout(env, scene, b_actor, t_actor, memory_train_actor, ar
             float(done),
             left_bitbudget,
         )
+        if memory_train is not None:
+            memory_train.appendTransition(
+                observation,
+                action,
+                baseQP,
+                nextBaseQP,
+                reward_D,
+                reward_P,
+                next_observation,
+                float(done),
+                left_bitbudget,
+            )
 
         action_values.append(action)
         steps += 1
@@ -302,6 +366,7 @@ def update_actor_from_part2(
     budget_violation,
     logs_dir,
     final_left_bitbudget=None,
+    episode_id: int | None = None,
 ):
     if not actor_samples:
         return {
@@ -320,6 +385,8 @@ def update_actor_from_part2(
     mixed_action_grads = []
     grad_rows = []
     for k, sample in enumerate(actor_samples):
+        raw_action = float(predict_action_batch[k][0])
+        decoded_action = decode_action(raw_action)
         grad_P = float(action_grads_P[0][k][0])
         grad_D = float(action_grads_D[0][k][0])
         grad_D, grad_P = _safe_normalize_pair(grad_D, grad_P)
@@ -334,6 +401,8 @@ def update_actor_from_part2(
         mixed_action_grads.append(selected_grad)
         grad_rows.append(
             {
+                "episode_update_id": "" if episode_id is None else int(episode_id),
+                "sample_idx": int(k),
                 "budget_violation": bool(budget_violation),
                 "final_left_bitbudget": (
                     float(final_left_bitbudget)
@@ -342,6 +411,14 @@ def update_actor_from_part2(
                 ),
                 "left_bitbudget": float(sample["left_bitbudget"]),
                 "use_size_P": use_size_P,
+                "raw_action": raw_action,
+                "executed_action_id": int(decoded_action.action_id),
+                "pruning_level": int(decoded_action.pruning_level),
+                "precision_level": int(decoded_action.precision_level),
+                "pruning_rate": float(decoded_action.pruning_rate),
+                "sh_degree": int(decoded_action.sh_degree),
+                "sh_bit": int(decoded_action.sh_bit),
+                "geo_bit": int(decoded_action.geo_bit),
                 "grad_P": grad_P,
                 "grad_D": grad_D,
                 "selected_grad": selected_grad,
@@ -354,26 +431,26 @@ def update_actor_from_part2(
 
     grad_log = logs_dir / "actor_gradient_log.csv"
     fieldnames = [
+        "episode_update_id",
+        "sample_idx",
         "budget_violation",
         "final_left_bitbudget",
         "left_bitbudget",
         "use_size_P",
+        "raw_action",
+        "executed_action_id",
+        "pruning_level",
+        "precision_level",
+        "pruning_rate",
+        "sh_degree",
+        "sh_bit",
+        "geo_bit",
         "grad_P",
         "grad_D",
         "selected_grad",
         "mixed_grad",
     ]
-    existing_header = ""
-    if grad_log.exists():
-        with grad_log.open("r", encoding="utf-8", errors="replace") as fp:
-            existing_header = fp.readline().strip()
-    write_header = (not grad_log.exists()) or existing_header.split(",") != fieldnames
-    with grad_log.open("a", newline="", encoding="utf-8") as fp:
-        writer = csv.DictWriter(fp, fieldnames=fieldnames)
-        if write_header:
-            if existing_header:
-                fp.write("\n")
-            writer.writeheader()
+    with _open_csv_writer_with_schema_rotation(grad_log, fieldnames) as writer:
         writer.writerows(grad_rows)
 
     return {
@@ -478,6 +555,8 @@ def update_from_replay(
             mixed_action_grads = []
             grad_rows = []
             for k in range(BATCH_SIZE):
+                raw_action = float(predict_action_batch[k][0])
+                decoded_action = decode_action(raw_action)
                 grad_P = float(action_grads_P[0][k][0])
                 grad_D = float(action_grads_D[0][k][0])
                 grad_D, grad_P = _safe_normalize_pair(grad_D, grad_P)
@@ -491,10 +570,23 @@ def update_from_replay(
                 mixed_action_grads.append(action_grads_D_P)
                 grad_rows.append(
                     {
+                        "episode_update_id": "",
+                        "sample_idx": int(k),
+                        "budget_violation": bool(left_bitbudget_batch_actor[k] < SIZE_THRESHOLD),
+                        "final_left_bitbudget": "",
                         "left_bitbudget": float(left_bitbudget_batch_actor[k]),
                         "use_size_P": action_grads_beta,
+                        "raw_action": raw_action,
+                        "executed_action_id": int(decoded_action.action_id),
+                        "pruning_level": int(decoded_action.pruning_level),
+                        "precision_level": int(decoded_action.precision_level),
+                        "pruning_rate": float(decoded_action.pruning_rate),
+                        "sh_degree": int(decoded_action.sh_degree),
+                        "sh_bit": int(decoded_action.sh_bit),
+                        "geo_bit": int(decoded_action.geo_bit),
                         "grad_P": grad_P,
                         "grad_D": grad_D,
+                        "selected_grad": action_grads_D_P,
                         "mixed_grad": action_grads_D_P,
                     }
                 )
@@ -503,14 +595,27 @@ def update_from_replay(
             Network.soft_update_ops_actor(None, t_actor, b_actor)
 
             grad_log = logs_dir / "actor_gradient_log.csv"
-            write_header = not grad_log.exists()
-            with grad_log.open("a", newline="", encoding="utf-8") as fp:
-                writer = csv.DictWriter(
-                    fp,
-                    fieldnames=["left_bitbudget", "use_size_P", "grad_P", "grad_D", "mixed_grad"],
-                )
-                if write_header:
-                    writer.writeheader()
+            fieldnames = [
+                "episode_update_id",
+                "sample_idx",
+                "budget_violation",
+                "final_left_bitbudget",
+                "left_bitbudget",
+                "use_size_P",
+                "raw_action",
+                "executed_action_id",
+                "pruning_level",
+                "precision_level",
+                "pruning_rate",
+                "sh_degree",
+                "sh_bit",
+                "geo_bit",
+                "grad_P",
+                "grad_D",
+                "selected_grad",
+                "mixed_grad",
+            ]
+            with _open_csv_writer_with_schema_rotation(grad_log, fieldnames) as writer:
                 writer.writerows(grad_rows)
 
     return {
@@ -637,6 +742,9 @@ def train(args):
         use_render = True
         use_crossscore = True
 
+    quality_dense_alpha = float(quality_cfg.get("dense_alpha", 1.0))
+    quality_violation_alpha = float(quality_cfg.get("violation_alpha", 2.0))
+
     gaussian_splatting_dir = resolve_input_path(
         render_cfg.get(
             "gaussian_splatting_dir",
@@ -700,6 +808,8 @@ def train(args):
         score_higher_is_better=bool(quality_cfg.get("score_higher_is_better", True)),
         crossscore_mode=str(quality_cfg.get("crossscore_mode", "placeholder")),
         quality_epsilon=float(quality_cfg.get("epsilon", 0.0)),
+        quality_dense_alpha=quality_dense_alpha,
+        quality_violation_alpha=quality_violation_alpha,
         crossscore_command_template=str(crossscore_cfg.get("command_template", "") or ""),
         crossscore_score_output=str(crossscore_cfg.get("score_output", "") or ""),
         crossscore_score_parse_mode=str(crossscore_cfg.get("score_parse_mode", "auto") or "auto"),
@@ -831,6 +941,9 @@ def train(args):
         "quality_drop",
         "quality_epsilon",
         "penalized_quality_drop",
+        "dense_quality_drop",
+        "dense_alpha",
+        "violation_alpha",
         "original_score_file",
         "original_score_key",
         "original_parser_mode",
@@ -842,6 +955,8 @@ def train(args):
         "crossscore_is_placeholder",
         "critic_loss_D",
         "critic_loss_P",
+        "critic_loss_D_after_part2",
+        "critic_loss_P_after_part2",
         "actor_update_count_P",
         "actor_update_count_D",
         "actor_update_source",
@@ -860,14 +975,12 @@ def train(args):
         "part2_steps",
         "checkpoint_path",
     ]
-    log_mode = "a" if args.resume else "w"
-    write_log_header = (not episode_log.exists()) or (not args.resume)
-    with episode_log.open(log_mode, newline="", encoding="utf-8") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=log_fields,
-        )
-        if write_log_header:
+    if args.resume:
+        with _open_csv_writer_with_schema_rotation(episode_log, log_fields):
+            pass
+    else:
+        with episode_log.open("w", newline="", encoding="utf-8") as fp:
+            writer = csv.DictWriter(fp, fieldnames=log_fields)
             writer.writeheader()
 
     episodes = int(args.episodes or training_cfg.get("episodes", 10))
@@ -903,8 +1016,16 @@ def train(args):
             t_actor=t_actor,
             memory_train_actor=memory_train_actor,
             args=args,
+            memory_train=memory_train,
         )
         global_step += int(part2_info["steps"])
+
+        critic_update_info_after_part2 = update_critics_from_replay(
+            b_critic=b_critic,
+            t_critic=t_critic,
+            t_actor=t_actor,
+            memory_train=memory_train,
+        )
 
         actor_update_info = update_actor_from_part2(
             b_actor=b_actor,
@@ -914,6 +1035,7 @@ def train(args):
             budget_violation=part2_info["budget_violation"],
             logs_dir=logs_dir,
             final_left_bitbudget=part2_info["final_left_bitbudget"],
+            episode_id=episode_id,
         )
 
         final_info = part2_info["final_info"]
@@ -932,8 +1054,14 @@ def train(args):
             memory_train=memory_train,
             memory_train_actor=memory_train_actor,
         )
-        critic_loss_D = critic_update_info.get("critic_loss_D", 0.0)
-        critic_loss_P = critic_update_info.get("critic_loss_P", 0.0)
+        critic_loss_D_after_part2 = critic_update_info_after_part2.get("critic_loss_D", 0.0)
+        critic_loss_P_after_part2 = critic_update_info_after_part2.get("critic_loss_P", 0.0)
+        if critic_update_info_after_part2.get("critic_update_count", 0):
+            critic_loss_D = critic_loss_D_after_part2
+            critic_loss_P = critic_loss_P_after_part2
+        else:
+            critic_loss_D = critic_update_info.get("critic_loss_D", 0.0)
+            critic_loss_P = critic_update_info.get("critic_loss_P", 0.0)
         part1_final_info = part1_info.get("final_info", {})
 
         row = {
@@ -991,6 +1119,9 @@ def train(args):
             "quality_drop": final_info.get("quality_drop", ""),
             "quality_epsilon": final_info.get("quality_epsilon", quality_cfg.get("epsilon", 0.0)),
             "penalized_quality_drop": final_info.get("penalized_quality_drop", ""),
+            "dense_quality_drop": final_info.get("dense_quality_drop", ""),
+            "dense_alpha": final_info.get("dense_alpha", quality_dense_alpha),
+            "violation_alpha": final_info.get("violation_alpha", quality_violation_alpha),
             "original_score_file": final_info.get("original_score_file", ""),
             "original_score_key": final_info.get("original_score_key", ""),
             "original_parser_mode": final_info.get("original_parser_mode", ""),
@@ -1002,6 +1133,8 @@ def train(args):
             "crossscore_is_placeholder": final_info.get("crossscore_is_placeholder", ""),
             "critic_loss_D": critic_loss_D,
             "critic_loss_P": critic_loss_P,
+            "critic_loss_D_after_part2": critic_loss_D_after_part2,
+            "critic_loss_P_after_part2": critic_loss_P_after_part2,
             "actor_update_count_P": actor_update_info.get("actor_update_count_P", 0),
             "actor_update_count_D": actor_update_info.get("actor_update_count_D", 0),
             "actor_update_source": actor_update_info.get("actor_update_source", "none"),

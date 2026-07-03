@@ -59,6 +59,8 @@ quality:
   score_higher_is_better: true
   crossscore_mode: "official_predict"
   epsilon: 0.0
+  dense_alpha: 1.0
+  violation_alpha: 2.0
 
 crossscore:
   command_template: ""
