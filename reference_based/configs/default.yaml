@@ -41,6 +41,8 @@ training:
   gamma: 0.99
   batch_size: 32
   seed: 42
+  # 25 action IDs need action-space noise, not the old tiny 0.2-level noise.
+  exploration_std: 5.0
 
 paths:
   gaussian_splatting_dir: "./gaussian-splatting-main"

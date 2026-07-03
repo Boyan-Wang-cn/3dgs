@@ -99,6 +99,290 @@ def _safe_normalize_pair(grad_d, grad_p):
     return grad_d * (abs(float(grad_p)) / (abs(float(grad_d)) + eps)), grad_p
 
 
+def run_part1_critic_rollout(env, scene, b_actor, t_actor, memory_train, args):
+    observation = env.reset(scene)
+    done = False
+    final_info = {}
+    final_reward_D = 0.0
+    final_reward_P = 0.0
+    steps = 0
+    action_values = []
+
+    while not done:
+        action_batch, delta_action_batch, baseQP_batch = b_actor.predict_action(
+            observation.reshape(1, -1)
+        )
+        _ = delta_action_batch
+        exploration = np.random.normal(0.0, args.exploration_std)
+        action = float(np.clip(action_batch[0][0] + exploration, 0.0, ACTION_BOUND[0]))
+        baseQP = float(baseQP_batch[0][0])
+
+        next_observation, reward_D, reward_P, done, info = env.step(action, baseQP)
+        _, _, nextBaseQP_batch = t_actor.predict_action(next_observation.reshape(1, -1))
+        nextBaseQP = float(nextBaseQP_batch[0][0])
+        left_bitbudget = float(info["left_bitbudget"])
+
+        memory_train.appendTransition(
+            observation,
+            action,
+            baseQP,
+            nextBaseQP,
+            reward_D,
+            reward_P,
+            next_observation,
+            float(done),
+            left_bitbudget,
+        )
+
+        action_values.append(action)
+        steps += 1
+        observation = next_observation
+        if done:
+            final_info = info
+            final_reward_D = reward_D
+            final_reward_P = reward_P
+
+    return {
+        "final_info": final_info,
+        "final_reward_D": final_reward_D,
+        "final_reward_P": final_reward_P,
+        "steps": steps,
+        "mean_noisy_action": float(np.mean(action_values)) if action_values else 0.0,
+    }
+
+
+def update_critics_from_replay(b_critic, t_critic, t_actor, memory_train):
+    critic_loss_D_tmp_print = []
+    critic_loss_P_tmp_print = []
+
+    if len(memory_train.replayMemory) < BATCH_SIZE:
+        return {
+            "critic_loss_D": 0.0,
+            "critic_loss_P": 0.0,
+            "critic_update_count": 0,
+        }
+
+    for _update_idx in range(UPDATE_STEP):
+        samples = memory_train.sample_batch(BATCH_SIZE)
+        (
+            s_batch,
+            a_batch,
+            baseQP_batch,
+            nextQP_batch,
+            r_D_batch,
+            r_P_batch,
+            s2_batch,
+            t_batch,
+            left_bitbudget_batch,
+        ) = map(np.array, zip(*samples))
+        _ = (nextQP_batch, left_bitbudget_batch)
+
+        target_action_batch, _, target_baseQP_batch = t_actor.predict_action(s2_batch)
+        target_q_value_D, target_q_value_P = t_critic.predict(
+            _state_with_base(s2_batch, target_baseQP_batch.reshape(-1)),
+            target_action_batch,
+        )
+
+        y_i_D = []
+        y_i_P = []
+        for k in range(BATCH_SIZE):
+            if t_batch[k]:
+                y_i_D.append([r_D_batch[k]])
+                y_i_P.append([r_P_batch[k]])
+            else:
+                if target_q_value_D[k][0] > 0:
+                    target_q_value_D[k][0] = 0
+                if target_q_value_P[k][0] > 0:
+                    target_q_value_P[k][0] = 0
+                y_i_D.append(r_D_batch[k] + GAMMA * target_q_value_D[k])
+                y_i_P.append(r_P_batch[k] + GAMMA * target_q_value_P[k])
+
+        b_critic.train(
+            _state_with_base(s_batch, baseQP_batch),
+            np.asarray(a_batch, dtype=np.float64).reshape(-1, 1),
+            np.asarray(y_i_D, dtype=np.float64).reshape(-1, 1),
+            np.asarray(y_i_P, dtype=np.float64).reshape(-1, 1),
+        )
+        predicted_critic_loss_D, predicted_critic_loss_P, predicted_critic_loss = (
+            b_critic.get_loss(
+                _state_with_base(s_batch, baseQP_batch),
+                np.asarray(a_batch, dtype=np.float64).reshape(-1, 1),
+                np.asarray(y_i_D, dtype=np.float64).reshape(-1, 1),
+                np.asarray(y_i_P, dtype=np.float64).reshape(-1, 1),
+            )
+        )
+        _ = predicted_critic_loss
+        critic_loss_D_tmp_print.append(predicted_critic_loss_D)
+        critic_loss_P_tmp_print.append(predicted_critic_loss_P)
+
+        Network.soft_update_ops_critic_D(None, t_critic, b_critic)
+        Network.soft_update_ops_critic_P(None, t_critic, b_critic)
+
+    return {
+        "critic_loss_D": float(np.mean(critic_loss_D_tmp_print)),
+        "critic_loss_P": float(np.mean(critic_loss_P_tmp_print)),
+        "critic_update_count": int(UPDATE_STEP),
+    }
+
+
+def run_part2_actor_rollout(env, scene, b_actor, t_actor, memory_train_actor, args):
+    observation = env.reset(scene)
+    done = False
+    final_info = {}
+    final_reward_D = 0.0
+    final_reward_P = 0.0
+    steps = 0
+    actor_samples = []
+    action_values = []
+
+    while not done:
+        action_batch, delta_action_batch, baseQP_batch = b_actor.predict_action(
+            observation.reshape(1, -1)
+        )
+        _ = delta_action_batch
+        action = float(np.clip(action_batch[0][0], 0.0, ACTION_BOUND[0]))
+        baseQP = float(baseQP_batch[0][0])
+
+        next_observation, reward_D, reward_P, done, info = env.step(action, baseQP)
+        _, _, nextBaseQP_batch = t_actor.predict_action(next_observation.reshape(1, -1))
+        nextBaseQP = float(nextBaseQP_batch[0][0])
+        left_bitbudget = float(info["left_bitbudget"])
+
+        actor_samples.append(
+            {
+                "state": observation,
+                "action": action,
+                "baseQP": baseQP,
+                "reward_D": reward_D,
+                "reward_P": reward_P,
+                "next_state": next_observation,
+                "done": float(done),
+                "left_bitbudget": left_bitbudget,
+            }
+        )
+        memory_train_actor.appendTransition(
+            observation,
+            action,
+            baseQP,
+            nextBaseQP,
+            reward_D,
+            reward_P,
+            next_observation,
+            float(done),
+            left_bitbudget,
+        )
+
+        action_values.append(action)
+        steps += 1
+        observation = next_observation
+        if done:
+            final_info = info
+            final_reward_D = reward_D
+            final_reward_P = reward_P
+
+    final_left_bitbudget = float(final_info.get("left_bitbudget", 0.0))
+    budget_violation = final_left_bitbudget < SIZE_THRESHOLD
+    return {
+        "actor_samples": actor_samples,
+        "budget_violation": budget_violation,
+        "final_left_bitbudget": final_left_bitbudget,
+        "final_info": final_info,
+        "final_reward_D": final_reward_D,
+        "final_reward_P": final_reward_P,
+        "steps": steps,
+        "mean_deterministic_action": float(np.mean(action_values)) if action_values else 0.0,
+    }
+
+
+def update_actor_from_part2(
+    b_actor,
+    t_actor,
+    b_critic,
+    actor_samples,
+    budget_violation,
+    logs_dir,
+    final_left_bitbudget=None,
+):
+    if not actor_samples:
+        return {
+            "actor_update_count_P": 0,
+            "actor_update_count_D": 0,
+            "actor_update_source": "none",
+        }
+
+    s_batch_actor = np.asarray([sample["state"] for sample in actor_samples])
+    predict_action_batch, _, baseQP_predict_batch = b_actor.predict_action(s_batch_actor)
+    action_grads_P, action_grads_D = b_critic.action_gradients(
+        _state_with_base(s_batch_actor, baseQP_predict_batch.reshape(-1)),
+        predict_action_batch,
+    )
+
+    mixed_action_grads = []
+    grad_rows = []
+    for k, sample in enumerate(actor_samples):
+        grad_P = float(action_grads_P[0][k][0])
+        grad_D = float(action_grads_D[0][k][0])
+        grad_D, grad_P = _safe_normalize_pair(grad_D, grad_P)
+
+        if budget_violation:
+            selected_grad = grad_P
+            use_size_P = 1.0
+        else:
+            selected_grad = grad_D
+            use_size_P = 0.0
+
+        mixed_action_grads.append(selected_grad)
+        grad_rows.append(
+            {
+                "budget_violation": bool(budget_violation),
+                "final_left_bitbudget": (
+                    float(final_left_bitbudget)
+                    if final_left_bitbudget is not None
+                    else float(sample["left_bitbudget"])
+                ),
+                "left_bitbudget": float(sample["left_bitbudget"]),
+                "use_size_P": use_size_P,
+                "grad_P": grad_P,
+                "grad_D": grad_D,
+                "selected_grad": selected_grad,
+                "mixed_grad": selected_grad,
+            }
+        )
+
+    b_actor.train(s_batch_actor, np.asarray(mixed_action_grads).reshape(-1, 1))
+    Network.soft_update_ops_actor(None, t_actor, b_actor)
+
+    grad_log = logs_dir / "actor_gradient_log.csv"
+    fieldnames = [
+        "budget_violation",
+        "final_left_bitbudget",
+        "left_bitbudget",
+        "use_size_P",
+        "grad_P",
+        "grad_D",
+        "selected_grad",
+        "mixed_grad",
+    ]
+    existing_header = ""
+    if grad_log.exists():
+        with grad_log.open("r", encoding="utf-8", errors="replace") as fp:
+            existing_header = fp.readline().strip()
+    write_header = (not grad_log.exists()) or existing_header.split(",") != fieldnames
+    with grad_log.open("a", newline="", encoding="utf-8") as fp:
+        writer = csv.DictWriter(fp, fieldnames=fieldnames)
+        if write_header:
+            if existing_header:
+                fp.write("\n")
+            writer.writeheader()
+        writer.writerows(grad_rows)
+
+    return {
+        "actor_update_count_P": len(actor_samples) if budget_violation else 0,
+        "actor_update_count_D": 0 if budget_violation else len(actor_samples),
+        "actor_update_source": "P" if budget_violation else "D",
+    }
+
+
 def update_from_replay(
     b_actor,
     b_critic,
@@ -304,6 +588,11 @@ def train(args):
 
     GAMMA = float(args.gamma if args.gamma is not None else training_cfg.get("gamma", GAMMA))
     BATCH_SIZE = int(args.batch_size if args.batch_size is not None else training_cfg.get("batch_size", BATCH_SIZE))
+    args.exploration_std = float(
+        args.exploration_std
+        if args.exploration_std is not None
+        else training_cfg.get("exploration_std", 5.0)
+    )
 
     checkpoints_dir = resolve_output_path(
         project_cfg.get("checkpoint_dir", "./checkpoints"), config
@@ -556,6 +845,19 @@ def train(args):
         "actor_update_count_P",
         "actor_update_count_D",
         "actor_update_source",
+        "budget_violation",
+        "training_flow",
+        "exploration_std",
+        "part1_reward_D",
+        "part1_reward_P",
+        "part1_left_bitbudget",
+        "part1_mean_action",
+        "part1_steps",
+        "part2_reward_D",
+        "part2_reward_P",
+        "part2_left_bitbudget",
+        "part2_mean_action",
+        "part2_steps",
         "checkpoint_path",
     ]
     log_mode = "a" if args.resume else "w"
@@ -577,75 +879,46 @@ def train(args):
         return
     for episode_id in range(start_episode, episodes + 1):
         scene = random.choice(scenes)
-        observation = env.reset(scene)
-        done = False
-        final_info = {}
-        final_reward_D = 0.0
-        final_reward_P = 0.0
-        episode_actor_update_count_P = 0
-        episode_actor_update_count_D = 0
-        last_update_info = None
+        part1_info = run_part1_critic_rollout(
+            env=env,
+            scene=scene,
+            b_actor=b_actor,
+            t_actor=t_actor,
+            memory_train=memory_train,
+            args=args,
+        )
+        global_step += int(part1_info["steps"])
 
-        while not done:
-            action_batch, delta_action_batch, baseQP_batch = b_actor.predict_action(
-                observation.reshape(1, -1)
-            )
-            _ = delta_action_batch
-            exploration = np.random.normal(0.0, args.exploration_std)
-            action = float(np.clip(action_batch[0][0] + exploration, 0.0, 24.0))
-            baseQP = float(baseQP_batch[0][0])
+        critic_update_info = update_critics_from_replay(
+            b_critic=b_critic,
+            t_critic=t_critic,
+            t_actor=t_actor,
+            memory_train=memory_train,
+        )
 
-            next_observation, reward_D, reward_P, done, info = env.step(action, baseQP)
-            global_step += 1
-            next_action_batch, _next_delta_action_batch, nextBaseQP_batch = t_actor.predict_action(
-                next_observation.reshape(1, -1)
-            )
-            _ = next_action_batch
-            nextBaseQP = float(nextBaseQP_batch[0][0])
-            left_bitbudget = float(info["left_bitbudget"])
+        part2_info = run_part2_actor_rollout(
+            env=env,
+            scene=scene,
+            b_actor=b_actor,
+            t_actor=t_actor,
+            memory_train_actor=memory_train_actor,
+            args=args,
+        )
+        global_step += int(part2_info["steps"])
 
-            memory_train.appendTransition(
-                observation,
-                action,
-                baseQP,
-                nextBaseQP,
-                reward_D,
-                reward_P,
-                next_observation,
-                float(done),
-                left_bitbudget,
-            )
-            memory_train_actor.appendTransition(
-                observation,
-                action,
-                baseQP,
-                nextBaseQP,
-                reward_D,
-                reward_P,
-                next_observation,
-                float(done),
-                left_bitbudget,
-            )
+        actor_update_info = update_actor_from_part2(
+            b_actor=b_actor,
+            t_actor=t_actor,
+            b_critic=b_critic,
+            actor_samples=part2_info["actor_samples"],
+            budget_violation=part2_info["budget_violation"],
+            logs_dir=logs_dir,
+            final_left_bitbudget=part2_info["final_left_bitbudget"],
+        )
 
-            update_info = update_from_replay(
-                b_actor,
-                b_critic,
-                t_actor,
-                t_critic,
-                memory_train,
-                memory_train_actor,
-                logs_dir,
-            )
-            if update_info is not None:
-                last_update_info = update_info
-                episode_actor_update_count_P += int(update_info.get("actor_update_count_P", 0))
-                episode_actor_update_count_D += int(update_info.get("actor_update_count_D", 0))
-
-            observation = next_observation
-            if done:
-                final_info = info
-                final_reward_D = reward_D
-                final_reward_P = reward_P
+        final_info = part2_info["final_info"]
+        final_reward_D = part2_info["final_reward_D"]
+        final_reward_P = part2_info["final_reward_P"]
 
         checkpoint_path = save_checkpoint(
             checkpoints_dir,
@@ -659,8 +932,9 @@ def train(args):
             memory_train=memory_train,
             memory_train_actor=memory_train_actor,
         )
-        critic_loss_D = last_update_info["critic_loss_D"] if last_update_info else 0.0
-        critic_loss_P = last_update_info["critic_loss_P"] if last_update_info else 0.0
+        critic_loss_D = critic_update_info.get("critic_loss_D", 0.0)
+        critic_loss_P = critic_update_info.get("critic_loss_P", 0.0)
+        part1_final_info = part1_info.get("final_info", {})
 
         row = {
             "episode": episode_id,
@@ -728,17 +1002,22 @@ def train(args):
             "crossscore_is_placeholder": final_info.get("crossscore_is_placeholder", ""),
             "critic_loss_D": critic_loss_D,
             "critic_loss_P": critic_loss_P,
-            "actor_update_count_P": episode_actor_update_count_P,
-            "actor_update_count_D": episode_actor_update_count_D,
-            "actor_update_source": (
-                "mixed"
-                if episode_actor_update_count_P and episode_actor_update_count_D
-                else "P"
-                if episode_actor_update_count_P
-                else "D"
-                if episode_actor_update_count_D
-                else "none"
-            ),
+            "actor_update_count_P": actor_update_info.get("actor_update_count_P", 0),
+            "actor_update_count_D": actor_update_info.get("actor_update_count_D", 0),
+            "actor_update_source": actor_update_info.get("actor_update_source", "none"),
+            "budget_violation": bool(part2_info.get("budget_violation", False)),
+            "training_flow": "explicit_part1_part2",
+            "exploration_std": args.exploration_std,
+            "part1_reward_D": part1_info.get("final_reward_D", ""),
+            "part1_reward_P": part1_info.get("final_reward_P", ""),
+            "part1_left_bitbudget": part1_final_info.get("left_bitbudget", ""),
+            "part1_mean_action": part1_info.get("mean_noisy_action", ""),
+            "part1_steps": part1_info.get("steps", ""),
+            "part2_reward_D": part2_info.get("final_reward_D", ""),
+            "part2_reward_P": part2_info.get("final_reward_P", ""),
+            "part2_left_bitbudget": part2_info.get("final_left_bitbudget", ""),
+            "part2_mean_action": part2_info.get("mean_deterministic_action", ""),
+            "part2_steps": part2_info.get("steps", ""),
             "checkpoint_path": str(checkpoint_path),
         }
         with episode_log.open("a", newline="", encoding="utf-8") as fp:
@@ -747,6 +1026,7 @@ def train(args):
 
         print(
             "episode={episode} scene={scene} num_groups={num_groups} "
+            "flow={flow} exploration_std={exploration_std:.2f} "
             "target_groups={target_groups} grid_size={grid_size} "
             "mean_action={mean_action:.3f} compact_ratio={size_ratio:.6f} "
             "render_ply_ratio={render_ply_ratio:.6f} estimated_ratio={estimated_ratio:.6f} "
@@ -755,6 +1035,8 @@ def train(args):
                 episode=row["episode"],
                 scene=row["scene"],
                 num_groups=row["num_groups"],
+                flow=row["training_flow"],
+                exploration_std=row["exploration_std"],
                 target_groups=row["target_num_groups"],
                 grid_size=row["grid_size"],
                 mean_action=row["mean_action"],
@@ -787,7 +1069,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr-actor", type=float, default=ACTOR_LEARNING_RATE)
     parser.add_argument("--lr-critic", type=float, default=CRITIC_LEARNING_RATE)
-    parser.add_argument("--exploration-std", type=float, default=0.2)
+    parser.add_argument("--exploration-std", type=float, default=None)
     parser.add_argument("--use-dummy-reward", action="store_true")
     parser.add_argument("--use-render", action="store_true")
     parser.add_argument("--use-crossscore", action="store_true")

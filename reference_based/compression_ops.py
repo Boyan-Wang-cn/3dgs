@@ -237,15 +237,16 @@ def apply_compression_to_vertices(
             prune_indices = indices[:prune_count]
         keep_mask[prune_indices] = False
 
-    kept_group_ids = []
-    kept_action_ids = []
-    kept_original_indices = []
+    vertex_group_ids = np.zeros(num_vertices, dtype=np.int32)
+    vertex_action_ids = np.zeros(num_vertices, dtype=np.int16)
     g_fields = geo_fields(vertices)
     rest_fields = sh_rest_fields(vertices)
 
     # Apply SH-degree zeroing and quantize-dequantize only to surviving points.
     for group_idx, indices in enumerate(group_indices):
         action = actions[group_idx] if group_idx < len(actions) else decode_action(0)
+        vertex_group_ids[indices] = int(group_idx)
+        vertex_action_ids[indices] = int(action.action_id)
         kept = np.asarray(indices, dtype=np.int64)[keep_mask[indices]]
         if len(kept) == 0:
             continue
@@ -256,16 +257,11 @@ def apply_compression_to_vertices(
         # but are not written into the compact package.
         if rest_fields:
             pass
-        kept_group_ids.append(np.full(len(kept), group_idx, dtype=np.int32))
-        kept_action_ids.append(np.full(len(kept), action.action_id, dtype=np.int16))
-        kept_original_indices.append(kept.astype(np.int64))
 
     compressed_vertices = vertices[keep_mask].copy()
-    kept_group_ids_arr = np.concatenate(kept_group_ids) if kept_group_ids else np.zeros(0, dtype=np.int32)
-    kept_action_ids_arr = np.concatenate(kept_action_ids) if kept_action_ids else np.zeros(0, dtype=np.int16)
-    kept_original_indices_arr = (
-        np.concatenate(kept_original_indices) if kept_original_indices else np.zeros(0, dtype=np.int64)
-    )
+    kept_group_ids_arr = vertex_group_ids[keep_mask].astype(np.int32, copy=True)
+    kept_action_ids_arr = vertex_action_ids[keep_mask].astype(np.int16, copy=True)
+    kept_original_indices_arr = np.nonzero(keep_mask)[0].astype(np.int64, copy=False)
 
     hist_info = action_histograms([a.action_id for a in actions])
     estimated_ratio = estimate_size_ratio_from_actions(
