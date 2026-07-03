@@ -24,7 +24,14 @@ except ImportError:
 
 
 DEFAULT_PREFERRED_SCORE_KEY = "pred_ssim_0_1"
-FALLBACK_SCORE_KEYS = ["mean_score", "score", "crossscore", "cross_score"]
+FALLBACK_SCORE_KEYS = [
+    "mean_score",
+    "score",
+    "crossscore",
+    "cross_score",
+    "pred_score",
+    "mean_pred_score",
+]
 # Keys with different directions/scales such as pred_mae and pred_mse are not
 # mixed automatically.  Formal training should set preferred_score_key to the
 # exact CrossScore scalar used as reward_D.
@@ -384,8 +391,10 @@ def _official_score_files(path: Path, parse_mode: str) -> list[Path]:
     for file in files:
         if file.suffix.lower() not in allowed_suffixes:
             continue
-        rel_parts = {part.lower() for part in file.relative_to(path).parts}
-        if path_is_score_summary or "score_summary" in rel_parts:
+        rel = file.relative_to(path)
+        rel_parts = {part.lower() for part in rel.parts}
+        is_root_score_json = len(rel.parts) == 1 and rel.name.lower() == "score.json"
+        if path_is_score_summary or "score_summary" in rel_parts or is_root_score_json:
             official.append(file)
     return official
 
