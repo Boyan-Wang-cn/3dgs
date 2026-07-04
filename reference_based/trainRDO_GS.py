@@ -363,11 +363,18 @@ def update_actor_from_part2(
     t_actor,
     b_critic,
     actor_samples,
-    budget_violation,
+    selected_source: str,
     logs_dir,
     final_left_bitbudget=None,
     episode_id: int | None = None,
+    quality_violation: bool = False,
+    quality_drop="",
+    quality_epsilon="",
+    size_violation: bool = False,
 ):
+    if selected_source not in {"P", "D"}:
+        raise ValueError(f"selected_source must be 'P' or 'D', got {selected_source!r}.")
+
     if not actor_samples:
         return {
             "actor_update_count_P": 0,
@@ -391,10 +398,10 @@ def update_actor_from_part2(
         grad_D = float(action_grads_D[0][k][0])
         grad_D, grad_P = _safe_normalize_pair(grad_D, grad_P)
 
-        if budget_violation:
+        if selected_source == "P":
             selected_grad = grad_P
             use_size_P = 1.0
-        else:
+        elif selected_source == "D":
             selected_grad = grad_D
             use_size_P = 0.0
 
@@ -403,7 +410,12 @@ def update_actor_from_part2(
             {
                 "episode_update_id": "" if episode_id is None else int(episode_id),
                 "sample_idx": int(k),
-                "budget_violation": bool(budget_violation),
+                "budget_violation": bool(size_violation),
+                "quality_violation": bool(quality_violation),
+                "quality_drop": quality_drop,
+                "quality_epsilon": quality_epsilon,
+                "size_violation": bool(size_violation),
+                "selected_source": selected_source,
                 "final_left_bitbudget": (
                     float(final_left_bitbudget)
                     if final_left_bitbudget is not None
@@ -434,6 +446,11 @@ def update_actor_from_part2(
         "episode_update_id",
         "sample_idx",
         "budget_violation",
+        "quality_violation",
+        "quality_drop",
+        "quality_epsilon",
+        "size_violation",
+        "selected_source",
         "final_left_bitbudget",
         "left_bitbudget",
         "use_size_P",
@@ -454,9 +471,9 @@ def update_actor_from_part2(
         writer.writerows(grad_rows)
 
     return {
-        "actor_update_count_P": len(actor_samples) if budget_violation else 0,
-        "actor_update_count_D": 0 if budget_violation else len(actor_samples),
-        "actor_update_source": "P" if budget_violation else "D",
+        "actor_update_count_P": len(actor_samples) if selected_source == "P" else 0,
+        "actor_update_count_D": len(actor_samples) if selected_source == "D" else 0,
+        "actor_update_source": selected_source,
     }
 
 
@@ -573,6 +590,11 @@ def update_from_replay(
                         "episode_update_id": "",
                         "sample_idx": int(k),
                         "budget_violation": bool(left_bitbudget_batch_actor[k] < SIZE_THRESHOLD),
+                        "quality_violation": False,
+                        "quality_drop": "",
+                        "quality_epsilon": "",
+                        "size_violation": bool(left_bitbudget_batch_actor[k] < SIZE_THRESHOLD),
+                        "selected_source": "P" if action_grads_beta else "D",
                         "final_left_bitbudget": "",
                         "left_bitbudget": float(left_bitbudget_batch_actor[k]),
                         "use_size_P": action_grads_beta,
@@ -599,6 +621,11 @@ def update_from_replay(
                 "episode_update_id",
                 "sample_idx",
                 "budget_violation",
+                "quality_violation",
+                "quality_drop",
+                "quality_epsilon",
+                "size_violation",
+                "selected_source",
                 "final_left_bitbudget",
                 "left_bitbudget",
                 "use_size_P",
@@ -961,6 +988,8 @@ def train(args):
         "actor_update_count_D",
         "actor_update_source",
         "budget_violation",
+        "quality_violation",
+        "size_violation",
         "training_flow",
         "exploration_std",
         "part1_reward_D",
@@ -1027,20 +1056,39 @@ def train(args):
             memory_train=memory_train,
         )
 
+        final_info = part2_info["final_info"]
+        final_reward_D = part2_info["final_reward_D"]
+        final_reward_P = part2_info["final_reward_P"]
+        final_left_bitbudget = float(part2_info["final_left_bitbudget"])
+        quality_drop_value = final_info.get("quality_drop", "")
+        quality_epsilon_value = final_info.get(
+            "quality_epsilon", quality_cfg.get("epsilon", 0.0)
+        )
+        quality_violation = False
+        if quality_drop_value != "" and quality_epsilon_value != "":
+            quality_violation = float(quality_drop_value) > float(quality_epsilon_value)
+        size_violation = final_left_bitbudget < SIZE_THRESHOLD
+        if quality_violation:
+            selected_source = "D"
+        elif size_violation:
+            selected_source = "P"
+        else:
+            selected_source = "P"
+
         actor_update_info = update_actor_from_part2(
             b_actor=b_actor,
             t_actor=t_actor,
             b_critic=b_critic,
             actor_samples=part2_info["actor_samples"],
-            budget_violation=part2_info["budget_violation"],
+            selected_source=selected_source,
             logs_dir=logs_dir,
-            final_left_bitbudget=part2_info["final_left_bitbudget"],
+            final_left_bitbudget=final_left_bitbudget,
             episode_id=episode_id,
+            quality_violation=quality_violation,
+            quality_drop=quality_drop_value,
+            quality_epsilon=quality_epsilon_value,
+            size_violation=size_violation,
         )
-
-        final_info = part2_info["final_info"]
-        final_reward_D = part2_info["final_reward_D"]
-        final_reward_P = part2_info["final_reward_P"]
 
         checkpoint_path = save_checkpoint(
             checkpoints_dir,
@@ -1138,7 +1186,9 @@ def train(args):
             "actor_update_count_P": actor_update_info.get("actor_update_count_P", 0),
             "actor_update_count_D": actor_update_info.get("actor_update_count_D", 0),
             "actor_update_source": actor_update_info.get("actor_update_source", "none"),
-            "budget_violation": bool(part2_info.get("budget_violation", False)),
+            "budget_violation": bool(size_violation),
+            "quality_violation": bool(quality_violation),
+            "size_violation": bool(size_violation),
             "training_flow": "explicit_part1_part2",
             "exploration_std": args.exploration_std,
             "part1_reward_D": part1_info.get("final_reward_D", ""),
