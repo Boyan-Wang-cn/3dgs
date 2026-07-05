@@ -37,7 +37,18 @@ def prepare_compressed_model_dir(
     scene_name: str,
     episode_id: int,
     iteration: int = 30000,
+    original_model_path: str | Path | None = None,
 ) -> Path:
     output_root = Path(output_root)
     model_dir = output_root / "compressed_models" / scene_name / f"episode_{int(episode_id):04d}"
-    return ensure_model_structure_from_ply(compressed_ply, model_dir, iteration)
+    model_dir = ensure_model_structure_from_ply(compressed_ply, model_dir, iteration)
+
+    if original_model_path is not None:
+        original_cfg = Path(original_model_path) / "cfg_args"
+        target_cfg = model_dir / "cfg_args"
+        if original_cfg.exists():
+            shutil.copy2(original_cfg, target_cfg)
+        else:
+            print(f"WARNING: original cfg_args not found: {original_cfg}")
+
+    return model_dir

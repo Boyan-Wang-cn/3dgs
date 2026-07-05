@@ -584,6 +584,7 @@ class GS_Environment(object):
             self.scene_name,
             self.episode,
             iteration=self.iteration,
+            original_model_path=self.original_model_path,
         )
         render_ply_size_bytes = compressed_ply_path.stat().st_size
         compact_package_path = compression_stats.get("compact_package_path", "")

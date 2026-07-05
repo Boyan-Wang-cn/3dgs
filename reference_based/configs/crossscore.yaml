@@ -47,7 +47,7 @@ quality:
   cache_original_score: true
   score_higher_is_better: true
   crossscore_mode: "official_predict"
-  epsilon: 0.02
+  epsilon: 0.05
   dense_alpha: 1.0
   violation_alpha: 2.0
 

@@ -144,6 +144,64 @@ def _score_output_path(base_output_dir: Path, score_output: str) -> Path:
     return base_output_dir / path
 
 
+def _candidate_score_targets(
+    direct_target: Path,
+    predict_output_dir: Path,
+    output_dir: Path,
+    scene_name: str | None,
+    tag: str | None,
+) -> list[Path]:
+    """Return robust CrossScore score directories, including alias-expanded outputs."""
+    alias_value = str(tag or scene_name or "crossscore")
+    candidates = [
+        Path(direct_target),
+        Path(predict_output_dir),
+        Path(predict_output_dir).parent / f"{Path(predict_output_dir).name}_{alias_value}",
+        Path(predict_output_dir).parent / f"{alias_value}_{alias_value}",
+        Path(predict_output_dir).parent,
+    ]
+
+    parent = Path(predict_output_dir).parent
+    if parent.exists():
+        for score_summary_dir in parent.rglob("score_summary"):
+            candidates.append(score_summary_dir.parent)
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate = Path(candidate)
+        key = str(candidate.resolve()) if candidate.exists() else str(candidate)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(candidate)
+    return deduped
+
+
+def _parse_first_available_score_target(
+    candidates: list[Path],
+    parse_mode: str,
+    preferred_score_key: str,
+    allow_image_fallback: bool,
+) -> tuple[dict[str, Any], Path]:
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            score_info = parse_crossscore_score_info(
+                candidate,
+                parse_mode=parse_mode,
+                preferred_score_key=preferred_score_key,
+                allow_image_fallback=allow_image_fallback,
+            )
+            return score_info, candidate
+        except (ValueError, FileNotFoundError) as exc:
+            last_error = exc
+    raise ValueError(
+        "Could not parse CrossScore score from any candidate target. "
+        f"Tried: {[str(candidate) for candidate in candidates]}. "
+        f"Last error: {last_error}"
+    )
+
+
 def compute_crossscore_real(
     crossscore_dir,
     render_dir,
@@ -234,18 +292,42 @@ def compute_crossscore_real(
         )
 
     score_target = _score_output_path(output_dir, score_output) if score_output else default_score_target
-    score_info = parse_crossscore_score_info(
-        score_target,
-        parse_mode=score_parse_mode or "auto",
-        preferred_score_key=preferred_score_key,
-        allow_image_fallback=allow_image_fallback,
-    )
+    if score_output:
+        score_info = parse_crossscore_score_info(
+            score_target,
+            parse_mode=score_parse_mode or "auto",
+            preferred_score_key=preferred_score_key,
+            allow_image_fallback=allow_image_fallback,
+        )
+        actual_score_target = Path(score_target)
+    else:
+        candidates = _candidate_score_targets(
+            direct_target=Path(score_target),
+            predict_output_dir=Path(predict_output_dir),
+            output_dir=Path(output_dir),
+            scene_name=scene_name,
+            tag=tag,
+        )
+        score_info, actual_score_target = _parse_first_available_score_target(
+            candidates,
+            parse_mode=score_parse_mode or "auto",
+            preferred_score_key=preferred_score_key,
+            allow_image_fallback=allow_image_fallback,
+        )
+        if Path(actual_score_target) != Path(score_target):
+            print(
+                "WARNING: Parsed CrossScore score from fallback target "
+                f"{actual_score_target} after direct target failed: {score_target}"
+            )
+
+    score_info["parser_requested_target"] = str(score_target)
+    score_info["parser_actual_target"] = str(actual_score_target)
     score = float(score_info["score"])
     stale_score.write_text(
         json.dumps(
             {
                 **score_info,
-                "source": str(score_target),
+                "source": str(actual_score_target),
                 "num_pairs": int(prepared["num_pairs"]),
             },
             indent=2,
